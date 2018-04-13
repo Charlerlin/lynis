@@ -1,0 +1,137 @@
+#!/bin/sh
+#########################################################################
+#
+#    * DO NOT REMOVE *
+#-----------------------------------------------------
+# PLUGIN_AUTHOR=Charles Herlin <charles.herlin@corp.ovh.com>
+# PLUGIN_CATEGORY=security
+# PLUGIN_DESC=Secaudit les tests
+# PLUGIN_NAME=secauditssh
+# PLUGIN_REQUIRED_TESTS=
+#-----------------------------------------------------
+#
+#########################################################################
+#
+    FROMIP_REGEX="^(from=(?:'|\")(,?(\d{1,3}(\.\d{1,3}){3}))+(?:'|\")\s+ssh|#|$)"
+    AUTHKEYFILE_PATTERN=""
+    AUTHKEYFILE_PATTERN_DEFAULT=".ssh/authorized_keys .ssh/authorized_keys2"
+    ALLOWED_NOLOGIN_SHELLS="/bin/false /usr/sbin/nologin"
+    HOME_LOGGABLE=""
+#
+#########################################################################
+#
+    # Add custom section to screen output
+    InsertSection "Secaudit ssh  plugin"
+#
+#################################################################################
+#
+    # Test        : CUST-5001
+    # Description : Checking for authorized_keys location
+
+    # Register our first custom test
+    # First check if OPENSSHD is known as a prerequisite for this test.
+    if [ ! -z "${SSH_DAEMON_RUNNING}" ]; then PREQS_MET="YES"; else PREQS_MET="NO"; fi
+    Register --test-no CUST-5001 --preqs-met ${PREQS_MET} --weight M --network NO --category security --description "Looking for SSH authorized_keys file location in SSHD conf"
+    if [ ${SKIPTEST} -eq 0 ]; then
+        Display --indent 2 --text "SSH_DAEMON_CONFIG ${SSH_DAEMON_CONFIG:-nosshvalue}"
+        FileIsReadable ${SSH_DAEMON_CONFIG}
+        if [ ${CANREAD} -eq 1 ]; then
+            RET=$( ${GREPBINARY} -iP "^AuthorizedKeysFile" $SSH_DAEMON_CONFIG )
+            if [ 0 -eq $? -a -n "$RET" ]; then
+                AUTHKEYFILE_PATTERN=$( echo $RET | sed 's/AuthorizedKeysFile//i' | sed 's#%h/##' | tr -s "[:space:]" )
+                Display --indent 2 --text "AuthorizedKeysFile location found" --result ${STATUS_FOUND} --color GREEN
+            fi
+        else
+            AUTHKEYFILE_PATTERN="$AUTHKEYFILE_PATTERN_DEFAULT"
+            Display --indent 2 --text "AuthorizedKeysFile location not found, fallback on default" --result ${STATUS_NOT_FOUND} --color YELLOW
+        fi
+        if [ -z "$AUTHKEYFILE_PATTERN" ]; then
+            Display --indent 2 --text "Cannot get AuthorizedKeysFile location" --result ${STATUS_NOT_FOUND} --color RED
+        fi
+    fi
+
+
+    # Test        : CUST-5002
+    # Description : Gathering users with valid login shell and home directory
+    Register --test-no CUST-5002 --weight M --network NO --category security --description "List user with login shell and home directory"
+    if [ ${SKIPTEST} -eq 0 ]; then
+        for line in $($SUDO_CMD cat /etc/passwd | cut -d ":" -f 1,7); do
+            user=$(echo $line | cut -d ":" -f 1);
+            shell=$(echo $line | cut -d ':' -f 2);
+            if echo $ALLOWED_NOLOGIN_SHELLS | ${GREPBINARY} -q $shell ; then
+                continue
+            else
+                Debug "User $user has a valid shell.";
+                if [ "x$user" = "xroot" ]; then
+                    HOME_LOGGABLE="${HOME_LOGGABLE:+$HOME_LOGGABLE }/root"
+                    continue
+                elif [ ! -d /home/$user ]; then
+                    Debug "User $user has no home directory."
+                    continue
+                fi
+                HOME_LOGGABLE="${HOME_LOGGABLE:+$HOME_LOGGABLE }/home/${user}"
+            fi
+        done
+        Display --indent 2 --text "Loggable homes $HOME_LOGGABLE"
+    fi
+
+
+    # Test        : CUST-5003
+    # Description : Looking for missing from field in authorized_keys for loggable users
+    if [ ${HOME_LOGGABLE} ]; then PREQS_MET="YES"; else PREQS_MET="NO"; fi
+    Register --test-no CUST-5003 --preqs-met ${PREQS_MET} --weight M --network NO --category security --description "Check for authorized_keys without from field"
+    if [ ${SKIPTEST} -eq 0 ]; then
+        NO_FROM=0
+        NO_READ=0
+        NO_FROM_REPORT=""
+        NO_READ_REPORT=""
+        for DIRECTORY in "${HOME_LOGGABLE}" ; do
+            FileIsReadable $DIRECTORY
+            if [ ${CANREAD} -eq 0 ]; then
+                NO_READ=1
+                Debug "Cannot read ${DIRECTORY}."
+                LogText "Cannot read ${DIRECTORY}."
+                NO_READ_REPORT="${NO_READ_REPORT:+$NO_READ_REPORT }$DIRECTORY"
+                continue
+            fi
+            for AKEYFILE in $AUTHKEYFILE_PATTERN; do
+                AKEYFILE=${DIRECTORY}/$AKEYFILE
+                #if [ ! -e $AKEYFILE ]; then Debug "$AKEYFILE does not exist"; continue ; fi
+                if ! FileExists $AKEYFILE ; then Debug "$AKEYFILE does not exist"; continue ; fi
+                if  FileIsReadable $AKEYFILE; then
+                    Debug "Treating $AKEYFILE"
+                    if ${GREPBINARY} -vqP $FROMIP_REGEX ${AKEYFILE} ; then
+                        bad_lines="$(${GREPBINARY} -vnP $FROMIP_REGEX ${AKEYFILE} | cut -d ':' -f 1 | tr '\n' ' ' | sed 's/ $//' )"
+                        LogText "Result: There are anywhere access keys in ${AKEYFILE} at lines ($bad_lines)."
+                        NO_FROM_REPORT="${NO_FROM_REPORT:+$NO_FROM_REPORT }${AKEYFILE}($bad_lines)"
+                        NO_FROM=1
+                    else
+                        LogText "Result: File ${AKEYFILE} is cleared from anywhere access keys."
+                    fi
+                else
+                    Debug "Cannot read ${AKEYFILE} "
+                    NO_READ_REPORT="${NO_READ_REPORT:+$NO_READ_REPORT }$AKEYFILE"
+                    NO_READ=1
+                fi
+            done
+        done
+        if [ $NO_READ -eq 1 ]; then
+            RESULT=${STATUS_ERROR};
+            RETCOLOR=RED
+        elif [ $NO_FROM -eq 1 ]; then
+            RESULT=${STATUS_FOUND}
+            RETCOLOR=RED
+        else
+            RESULT=${STATUS_NOT_FOUND}
+            RETCOLOR=GREEN
+        fi
+        Display --indent 2 --text "Check for authorized_keys without from field" --result "$RESULT" --color $RETCOLOR
+        if [ $NO_READ -eq 1 -o $NO_FROM -eq 1 ]; then
+            Report "ssh_missing_from=${NO_READ_REPORT:+cant_read(${NO_READ_REPORT})|}${NO_FROM_REPORT:+missing_from(${NO_FROM_REPORT}})"
+        fi
+    fi
+
+# Wait for keypress (unless --quick is being used)
+WaitForKeyPress
+
+#EOF
