@@ -72,7 +72,12 @@
                 HOME_LOGGABLE="${HOME_LOGGABLE:+$HOME_LOGGABLE }/home/${user}"
             fi
         done
-        Display --indent 2 --text "Loggable homes $HOME_LOGGABLE"
+        if [ ! -z "$HOME_LOGGABLE" ]; then
+            Display --indent 2 --text "Find users that can log into this host" --result "${STATUS_FOUND}" --color GREEN
+        else
+            Display --indent 2 --text "Find users that can log into this host" --result "${STATUS_NOT_FOUND}" --color YELLOW
+        fi
+        LogText "Loggable homes ${HOME_LOGGABLE:-none}"
     fi
 
 
@@ -90,27 +95,26 @@
             FileIsReadable $DIRECTORY
             if [ ${CANREAD} -eq 0 ]; then
                 NO_READ=1
-                Debug "Cannot read ${DIRECTORY}."
-                LogText "Cannot read ${DIRECTORY}."
+                Debug "Cannot read directory ${DIRECTORY}."
+                LogText "Cannot read directory ${DIRECTORY}."
                 NO_READ_REPORT="${NO_READ_REPORT:+$NO_READ_REPORT }$DIRECTORY"
                 continue
             fi
             for AKEYFILE in $AUTHKEYFILE_PATTERN; do
                 AKEYFILE=${DIRECTORY}/$AKEYFILE
-                #if [ ! -e $AKEYFILE ]; then Debug "$AKEYFILE does not exist"; continue ; fi
-                if ! FileExists $AKEYFILE ; then Debug "$AKEYFILE does not exist"; continue ; fi
+                if ! FileExists $AKEYFILE ; then Debug "File $AKEYFILE does not exist"; continue ; fi
                 if  FileIsReadable $AKEYFILE; then
-                    Debug "Treating $AKEYFILE"
+                    Debug "Treating file $AKEYFILE"
                     if ${GREPBINARY} -vqP $FROMIP_REGEX ${AKEYFILE} ; then
                         bad_lines="$(${GREPBINARY} -vnP $FROMIP_REGEX ${AKEYFILE} | cut -d ':' -f 1 | tr '\n' ' ' | sed 's/ $//' )"
-                        LogText "Result: There are anywhere access keys in ${AKEYFILE} at lines ($bad_lines)."
+                        LogText "Result: There are anywhere access keys in file ${AKEYFILE} at lines ($bad_lines)."
                         NO_FROM_REPORT="${NO_FROM_REPORT:+$NO_FROM_REPORT }${AKEYFILE}($bad_lines)"
                         NO_FROM=1
                     else
                         LogText "Result: File ${AKEYFILE} is cleared from anywhere access keys."
                     fi
                 else
-                    Debug "Cannot read ${AKEYFILE} "
+                    Debug "Cannot read file ${AKEYFILE} "
                     NO_READ_REPORT="${NO_READ_REPORT:+$NO_READ_REPORT }$AKEYFILE"
                     NO_READ=1
                 fi
