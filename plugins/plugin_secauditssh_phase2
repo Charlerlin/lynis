@@ -42,11 +42,11 @@
                 Display --indent 2 --text "AuthorizedKeysFile location found" --result ${STATUS_FOUND} --color GREEN
             fi
         else
-            AUTHKEYFILE_PATTERN="$AUTHKEYFILE_PATTERN_DEFAULT"
-            Display --indent 2 --text "AuthorizedKeysFile location not found, fallback on default" --result ${STATUS_NOT_FOUND} --color YELLOW
+            Display --indent 2 --text "No AuthorizedKeysFile location found" --result "${STATUS_NOT_FOUND}" --color RED
         fi
         if [ -z "$AUTHKEYFILE_PATTERN" ]; then
-            Display --indent 2 --text "Cannot get AuthorizedKeysFile location" --result ${STATUS_NOT_FOUND} --color RED
+            AUTHKEYFILE_PATTERN="$AUTHKEYFILE_PATTERN_DEFAULT"
+            Display --indent 2 --text "AuthorizedKeysFile location not found, fallback on default" --result "${STATUS_NOT_FOUND}" --color YELLOW
         fi
     fi
 
@@ -78,14 +78,15 @@
 
     # Test        : CUST-5003
     # Description : Looking for missing from field in authorized_keys for loggable users
-    if [ ${HOME_LOGGABLE} ]; then PREQS_MET="YES"; else PREQS_MET="NO"; fi
+    if [ "${HOME_LOGGABLE}" -a ! -z "${AUTHKEYFILE_PATTERN}" ]; then PREQS_MET="YES"; else PREQS_MET="NO"; fi
     Register --test-no CUST-5003 --preqs-met ${PREQS_MET} --weight M --network NO --category security --description "Check for authorized_keys without from field"
     if [ ${SKIPTEST} -eq 0 ]; then
         NO_FROM=0
         NO_READ=0
         NO_FROM_REPORT=""
         NO_READ_REPORT=""
-        for DIRECTORY in "${HOME_LOGGABLE}" ; do
+        for DIRECTORY in ${HOME_LOGGABLE} ; do
+            Debug "Treating directory $DIRECTORY"
             FileIsReadable $DIRECTORY
             if [ ${CANREAD} -eq 0 ]; then
                 NO_READ=1
@@ -116,16 +117,16 @@
             done
         done
         if [ $NO_READ -eq 1 ]; then
-            RESULT=${STATUS_ERROR};
+            RESULT="${STATUS_ERROR}";
             RETCOLOR=RED
         elif [ $NO_FROM -eq 1 ]; then
-            RESULT=${STATUS_FOUND}
+            RESULT="${STATUS_FOUND}"
             RETCOLOR=RED
         else
-            RESULT=${STATUS_NOT_FOUND}
+            RESULT="${STATUS_NOT_FOUND}"
             RETCOLOR=GREEN
         fi
-        Display --indent 2 --text "Check for authorized_keys without from field" --result "$RESULT" --color $RETCOLOR
+        Display --indent 2 --text "Check for authorized_keys without from field" --result "${RESULT}" --color $RETCOLOR
         if [ $NO_READ -eq 1 -o $NO_FROM -eq 1 ]; then
             Report "ssh_missing_from=${NO_READ_REPORT:+cant_read(${NO_READ_REPORT})|}${NO_FROM_REPORT:+missing_from(${NO_FROM_REPORT}})"
         fi
